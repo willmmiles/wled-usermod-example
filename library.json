@@ -1,0 +1,7 @@
+{
+  "name": "wled-usermod-example",
+  "build": {
+    "libArchive": false
+  },
+  "dependencies": {}
+}
