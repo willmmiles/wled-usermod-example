@@ -1,21 +1,23 @@
 #include "wled.h"
 
 /*
- * Usermods allow you to add own functionality to WLED more easily
- * See: https://github.com/wled-dev/WLED/wiki/Add-own-functionality
- * 
- * This is an example for a v2 usermod.
- * v2 usermods are class inheritance based and can (but don't have to) implement more functions, each of them is shown in this example.
- * Multiple v2 usermods can be added to one compilation easily.
- * 
- * Creating a usermod:
- * This file serves as an example. If you want to create a usermod, it is recommended to use usermod_v2_empty.h from the usermods folder as a template.
- * Please remember to rename the class and file to a descriptive name.
- * You may also use multiple .h and .cpp files.
- * 
- * Using a usermod:
- * 1. Copy the usermod into the sketch folder (same folder as wled00.ino)
- * 2. Register the usermod by adding #include "usermod_filename.h" in the top and registerUsermod(new MyUsermodClass()) in the bottom of usermods_list.cpp
+ * Usermods allow you to add own functionality to WLED without touching core source files.
+ * See the WLED docs: https://kno.wled.ge/advanced/custom-features/
+ *
+ * This is an example usermod. It demonstrates:
+ *   - persistent settings via addToConfig() / readFromConfig()
+ *   - JSON state read/write via addToJsonState() / readFromJsonState()
+ *   - MQTT subscribe and message handling (guarded by WLED_DISABLE_MQTT)
+ *   - button event handling
+ *   - the Usermod Settings page via appendConfigData()
+ *
+ * To create your own usermod:
+ *   1. Fork https://github.com/wled/wled-usermod-example on GitHub.
+ *   2. Rename the class and file to something descriptive.
+ *   3. Reference your fork in platformio_override.ini via custom_usermods.
+ *
+ * REGISTER_USERMOD() at the bottom self-registers the instance — no other
+ * file edits are needed.
  */
 
 //class name. Use something descriptive and leave the ": public Usermod" part :)
@@ -28,11 +30,12 @@ class MyExampleUsermod : public Usermod {
     bool initDone = false;
     unsigned long lastTime = 0;
 
-    // set your config variables to their boot default value (this can also be done in readFromConfig() or a constructor if you prefer)
+    // config variables — boot defaults can be set here or inside readFromConfig()
     bool testBool = false;
     unsigned long testULong = 42424242;
     float testFloat = 42.42;
     String testString = "Forty-Two";
+    uint16_t greatValue = 0;  // example persistent value exposed in JSON state
 
     // These config variables have defaults set inside readFromConfig()
     int testInt;
@@ -62,23 +65,10 @@ class MyExampleUsermod : public Usermod {
      */
     inline bool isEnabled() { return enabled; }
 
-    // in such case add the following to another usermod:
-    //  in private vars:
-    //   #ifdef USERMOD_EXAMPLE
-    //   MyExampleUsermod* UM;
-    //   #endif
-    //  in setup()
-    //   #ifdef USERMOD_EXAMPLE
-    //   UM = (MyExampleUsermod*) UsermodManager::lookup(USERMOD_ID_EXAMPLE);
-    //   #endif
-    //  somewhere in loop() or other member method
-    //   #ifdef USERMOD_EXAMPLE
-    //   if (UM != nullptr) isExampleEnabled = UM->isEnabled();
-    //   if (!isExampleEnabled) UM->enable(true);
-    //   #endif
+    // To access this usermod from another usermod, cast the result of UsermodManager::lookup():
+    //   MyExampleUsermod* um = (MyExampleUsermod*) UsermodManager::lookup(USERMOD_ID_MYUSERMOD);
+    // Make sure to assign a unique ID in getId()!
 
-
-    // methods called by WLED (can be inlined as they are called only once but if you call them explicitly define them out of class)
 
     /*
      * setup() is called once at boot. WiFi is not yet connected at this point.
@@ -151,8 +141,9 @@ class MyExampleUsermod : public Usermod {
 
 
     /*
-     * addToJsonState() can be used to add custom entries to the /json/state part of the JSON API (state object).
-     * Values in the state object may be modified by connected clients
+     * addToJsonState() adds entries to the /json/state response. Clients can read and write these.
+     * Use this to expose runtime state that should be controllable via the API.
+     * addToJsonState() is NOT called for presets — use addToConfig() for persistent values.
      */
     void addToJsonState(JsonObject& root) override
     {
@@ -161,13 +152,13 @@ class MyExampleUsermod : public Usermod {
       JsonObject usermod = root[FPSTR(_name)];
       if (usermod.isNull()) usermod = root.createNestedObject(FPSTR(_name));
 
-      //usermod["user0"] = userVar0;
+      usermod["greatValue"] = greatValue;
     }
 
 
     /*
-     * readFromJsonState() can be used to receive data clients send to the /json/state part of the JSON API (state object).
-     * Values in the state object may be modified by connected clients
+     * readFromJsonState() receives values a client POSTs to /json/state.
+     * The JSON key nesting matches what addToJsonState() writes — clients send back the same structure.
      */
     void readFromJsonState(JsonObject& root) override
     {
@@ -175,24 +166,15 @@ class MyExampleUsermod : public Usermod {
 
       JsonObject usermod = root[FPSTR(_name)];
       if (!usermod.isNull()) {
-        // expect JSON usermod data in usermod name object: {"ExampleUsermod:{"user0":10}"}
-        userVar0 = usermod["user0"] | userVar0; //if "user0" key exists in JSON, update, else keep old value
+        // getJsonValue copies the value if present and returns true; leaves the variable unchanged if missing
+        getJsonValue(usermod["greatValue"], greatValue);
       }
-      // you can as well check WLED state JSON keys
-      //if (root["bri"] == 255) Serial.println(F("Don't burn down your garage!"));
     }
 
 
     /*
-     * addToConfig() can be used to add custom persistent settings to the cfg.json file in the "um" (usermod) object.
-     * It will be called by WLED when settings are actually saved (for example, LED settings are saved)
-     * If you want to force saving the current state, use serializeConfig() in your loop().
-     * 
-     * CAUTION: serializeConfig() will initiate a filesystem write operation.
-     * It might cause the LEDs to stutter and will cause flash wear if called too often.
-     * Use it sparingly and always in the loop, never in network callbacks!
-     * 
-     * addToConfig() will make your settings editable through the Usermod Settings page automatically.
+     * addToConfig() saves settings to cfg.json under the "um" object. WLED calls this whenever settings are saved.
+     * The Usermod Settings page in the UI is generated automatically from the keys you write here.
      *
      * Usermod Settings Overview:
      * - Numeric values are treated as floats in the browser.
@@ -210,20 +192,14 @@ class MyExampleUsermod : public Usermod {
      *     - Red color indicates a conflict.  Yellow color indicates a pin with a warning (e.g. an input-only pin)
      *   - Tip: use int8_t to store the pin value in the Usermod, so a -1 value (pin not set) can be used
      *
-     * See usermod_v2_auto_save.h for an example that saves Flash space by reusing ArduinoJson key name strings
-     * 
-     * If you need a dedicated settings page with custom layout for your Usermod, that takes a lot more work.  
-     * You will have to add the setting to the HTML, xml.cpp and set.cpp manually.
-     * See the WLED Soundreactive fork (code and wiki) for reference.  https://github.com/atuline/WLED
-     * 
-     * I highly recommend checking out the basics of ArduinoJson serialization and deserialization in order to use custom settings!
+     * To force a config write from loop(), call serializeConfig() — but use it sparingly (flash wear,
+     * possible LED stutter). Never call it from a network callback.
      */
     void addToConfig(JsonObject& root) override
     {
       JsonObject top = root.createNestedObject(FPSTR(_name));
       top[FPSTR(_enabled)] = enabled;
-      //save these vars persistently whenever settings are saved
-      top["great"] = userVar0;
+      top["great"] = greatValue;
       top["testBool"] = testBool;
       top["testInt"] = testInt;
       top["testLong"] = testLong;
@@ -237,30 +213,18 @@ class MyExampleUsermod : public Usermod {
 
 
     /*
-     * readFromConfig() can be used to read back the custom settings you added with addToConfig().
-     * This is called by WLED when settings are loaded (currently this only happens immediately after boot, or after saving on the Usermod Settings page)
-     * 
-     * readFromConfig() is called BEFORE setup(). This means you can use your persistent values in setup() (e.g. pin assignments, buffer sizes),
-     * but also that if you want to write persistent values to a dynamic buffer, you'd need to allocate it here instead of in setup.
-     * If you don't know what that is, don't fret. It most likely doesn't affect your use case :)
-     * 
-     * Return true in case the config values returned from Usermod Settings were complete, or false if you'd like WLED to save your defaults to disk (so any missing values are editable in Usermod Settings)
-     * 
-     * getJsonValue() returns false if the value is missing, or copies the value into the variable provided and returns true if the value is present
-     * The configComplete variable is true only if the "exampleUsermod" object and all values are present.  If any values are missing, WLED will know to call addToConfig() to save them
-     * 
-     * This function is guaranteed to be called on boot, but could also be called every time settings are updated
+     * readFromConfig() is called before setup() and again after settings are saved.
+     * Return false if any expected keys were missing — WLED will then call addToConfig() to write the defaults.
+     * getJsonValue(src, dest) copies the value if present and returns true; leaves dest unchanged if missing.
+     * getJsonValue(src, dest, default) also assigns a default when the key is absent.
      */
     bool readFromConfig(JsonObject& root) override
     {
-      // default settings values could be set here (or below using the 3-argument getJsonValue()) instead of in the class definition or constructor
-      // setting them inside readFromConfig() is slightly more robust, handling the rare but plausible use case of single value being missing after boot (e.g. if the cfg.json was manually edited and a value was removed)
-
       JsonObject top = root[FPSTR(_name)];
 
       bool configComplete = !top.isNull();
 
-      configComplete &= getJsonValue(top["great"], userVar0);
+      configComplete &= getJsonValue(top["great"], greatValue);
       configComplete &= getJsonValue(top["testBool"], testBool);
       configComplete &= getJsonValue(top["testULong"], testULong);
       configComplete &= getJsonValue(top["testFloat"], testFloat);
@@ -279,17 +243,18 @@ class MyExampleUsermod : public Usermod {
 
 
     /*
-     * appendConfigData() is called when user enters usermod settings page
-     * it may add additional metadata for certain entry fields (adding drop down is possible)
-     * be careful not to add too much as oappend() buffer is limited to 3k
+     * appendConfigData() is called when the Usermod Settings page renders.
+     * Write JavaScript snippets to settingsScript to add helper text or dropdowns for your config fields.
+     * addInfo('<ModName>:<key>', 1, '<html>') adds a tooltip/label next to the field.
+     * addDropdown / addOption replace a plain text input with a <select>.
      */
-    void appendConfigData() override
+    void appendConfigData(Print& settingsScript) override
     {
-      oappend(F("addInfo('")); oappend(String(FPSTR(_name)).c_str()); oappend(F(":great")); oappend(F("',1,'<i>(this is a great config value)</i>');"));
-      oappend(F("addInfo('")); oappend(String(FPSTR(_name)).c_str()); oappend(F(":testString")); oappend(F("',1,'enter any string you want');"));
-      oappend(F("dd=addDropdown('")); oappend(String(FPSTR(_name)).c_str()); oappend(F("','testInt');"));
-      oappend(F("addOption(dd,'Nothing',0);"));
-      oappend(F("addOption(dd,'Everything',42);"));
+      settingsScript.print(F("addInfo('")); settingsScript.print(FPSTR(_name)); settingsScript.print(F(":great',1,'<i>(this is a great config value)</i>');"));
+      settingsScript.print(F("addInfo('")); settingsScript.print(FPSTR(_name)); settingsScript.print(F(":testString',1,'enter any string you want');"));
+      settingsScript.print(F("dd=addDropdown('")); settingsScript.print(FPSTR(_name)); settingsScript.print(F("','testInt');"));
+      settingsScript.print(F("addOption(dd,'Nothing',0);"));
+      settingsScript.print(F("addOption(dd,'Everything',42);"));
     }
 
 
@@ -329,33 +294,33 @@ class MyExampleUsermod : public Usermod {
 
 #ifndef WLED_DISABLE_MQTT
     /**
-     * handling of MQTT message
-     * topic only contains stripped topic (part after /wled/MAC)
+     * onMqttMessage() is called when a subscribed MQTT topic receives a message.
+     * topic only contains stripped topic (part after /wled/MAC).
+     * Return true to mark the message handled (prevents other usermods from seeing it).
+     * These methods must be inside a #ifndef WLED_DISABLE_MQTT guard — MQTT support is a compile-time option.
+     * See usermods/multi_relay for a well-structured subscribe-in-connect / handle-in-message example.
      */
     bool onMqttMessage(char* topic, char* payload) override {
-      // check if we received a command
       //if (strlen(topic) == 8 && strncmp_P(topic, PSTR("/command"), 8) == 0) {
       //  String action = payload;
-      //  if (action == "on") {
-      //    enabled = true;
-      //    return true;
-      //  } else if (action == "off") {
-      //    enabled = false;
-      //    return true;
-      //  } else if (action == "toggle") {
-      //    enabled = !enabled;
-      //    return true;
-      //  }
+      //  if (action == "on")     { enabled = true;  return true; }
+      //  if (action == "off")    { enabled = false; return true; }
+      //  if (action == "toggle") { enabled = !enabled; return true; }
       //}
       return false;
     }
 
     /**
-     * onMqttConnect() is called when MQTT connection is established
+     * onMqttConnect() is called when MQTT connection is established.
+     * Subscribe to topics here; mqttDeviceTopic holds the device-specific prefix.
      */
     void onMqttConnect(bool sessionPresent) override {
-      // do any MQTT related initialisation here
-      //publishMqtt("I am alive!");
+      //char subuf[64];
+      //if (mqttDeviceTopic[0] != 0) {
+      //  strcpy(subuf, mqttDeviceTopic);
+      //  strcat_P(subuf, PSTR("/command"));
+      //  mqtt->subscribe(subuf, 0);
+      //}
     }
 #endif
 
@@ -370,13 +335,12 @@ class MyExampleUsermod : public Usermod {
 
 
     /*
-     * getId() allows you to optionally give your V2 usermod an unique ID (please define it in const.h!).
-     * This could be used in the future for the system to determine whether your usermod is installed.
+     * getId() allows you to optionally give your usermod a unique ID.
+     * The base class returns USERMOD_ID_UNSPECIFIED, which is correct for most custom usermods.
+     * Override only if you need reliable cross-usermod lookup via UsermodManager::lookup()
+     * and have multiple usermods with the same ID registered simultaneously.
      */
-    uint16_t getId() override
-    {
-      return USERMOD_ID_EXAMPLE;
-    }
+    // uint16_t getId() override { return USERMOD_ID_UNSPECIFIED; }
 
    //More methods can be added in the future, this example will then be extended.
    //Your usermod will remain compatible as it does not need to implement all methods from the Usermod base class!
