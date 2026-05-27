@@ -8,6 +8,9 @@ on:
     - cron: '0 4 * * *'   # nightly at 04:00 UTC
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
