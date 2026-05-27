@@ -8,27 +8,24 @@ on:
     - cron: '0 4 * * *'   # nightly at 04:00 UTC
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout usermod
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: usermod
 
       - name: Checkout WLED
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: wled/WLED
           path: WLED
 
       - name: Cache PlatformIO packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.platformio
           key: pio-esp32-${{ hashFiles('WLED/platformio.ini') }}
